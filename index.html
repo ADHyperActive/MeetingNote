@@ -1,19 +1,235 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Otter Clone - Record</title>
-    <link rel="stylesheet" href="style.css">
+    <title>Meeting Summarizer</title>
+    <style>
+        body { font-family: sans-serif; }
+        textarea { width: 80%; height: 200px; margin-bottom: 10px; }
+        #recordings { margin-top: 20px; }
+        #view-recordings { display: none; }
+        #recording-view { display: none; }
+    </style>
 </head>
 <body>
-    <h1>Record Meeting</h1>
+    <h1>Meeting Summarizer</h1>
+
     <button id="start">Start Recording</button>
     <button id="stop" disabled>Stop Recording</button>
-    <div id="transcription"></div>
-    <div id="speakers"></div>
-    <button id="save" disabled>Save Meeting</button>
-    <button id="delete" disabled>Delete Recording</button>
-    <button id="resume" disabled>Resume Recording</button>
-    <input type="file" id="upload" accept=".meeting">
-    <script src="script.js"></script>
+    <button id="viewSaved">View Saved Meetings</button>
+    <div id="recording-status"></div>
+
+    <div id="recordings">
+        <h2>Recordings:</h2>
+        <ul id="recording-list"></ul>
+        <input type="file" id="fileInput" accept=".meeting">
+    </div>
+
+    <div id="recording-view">
+        <h2>Meeting Details</h2>
+        <div id="meeting-details"></div>
+        <button id="backToSaved">Back to Saved Meetings</button>
+    </div>
+
+    <script>
+        let mediaRecorder;
+        let audioChunks = [];
+        let speakers = {};
+        let speakerCount = 0;
+        let recordingData = null;
+
+        const startButton = document.getElementById('start');
+        const stopButton = document.getElementById('stop');
+        const recordingStatus = document.getElementById('recording-status');
+        const recordingList = document.getElementById('recording-list');
+        const fileInput = document.getElementById('fileInput');
+        const viewSavedButton = document.getElementById('viewSaved');
+        const recordingsDiv = document.getElementById('recordings');
+        const recordingViewDiv = document.getElementById('recording-view');
+        const meetingDetailsDiv = document.getElementById('meeting-details');
+        const backToSavedButton = document.getElementById('backToSaved');
+
+        startButton.onclick = async () => {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream);
+
+            mediaRecorder.ondataavailable = event => {
+                audioChunks.push(event.data);
+            };
+
+            mediaRecorder.onstop = async () => {
+                const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                const audioUrl = URL.createObjectURL(audioBlob);
+
+                recordingData = {
+                    audioUrl: audioUrl,
+                    transcription: await transcribeAudio(audioBlob),
+                    speakers: speakers
+                };
+
+                const action = window.prompt("Save, Delete, or Resume? (save/delete/resume)", "save");
+
+                if (action && action.toLowerCase() === "save") {
+                    saveRecording(recordingData);
+                } else if (action && action.toLowerCase() === "delete") {
+                    audioChunks = [];
+                    speakers = {};
+                    speakerCount = 0;
+                    recordingData = null;
+                } else if (action && action.toLowerCase() === "resume") {
+                    startButton.click();
+                } else {
+                    audioChunks = [];
+                    speakers = {};
+                    speakerCount = 0;
+                    recordingData = null;
+                }
+
+                audioChunks = [];
+                speakers = {};
+                speakerCount = 0;
+                recordingData = null;
+
+                startButton.disabled = false;
+                stopButton.disabled = true;
+                recordingStatus.textContent = '';
+            };
+
+            mediaRecorder.start();
+            startButton.disabled = true;
+            stopButton.disabled = false;
+            recordingStatus.textContent = 'Recording...';
+        };
+
+        stopButton.onclick = () => {
+            mediaRecorder.stop();
+        };
+
+        async function transcribeAudio(audioBlob) {
+            const formData = new FormData();
+            formData.append('audio', audioBlob, 'recording.wav');
+
+            try {
+                const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Bearer YOUR_OPENAI_API_KEY' // Replace with your OpenAI API key
+                    },
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                const transcription = data.text;
+                return await identifySpeakers(transcription);
+            } catch (error) {
+                console.error('Transcription error:', error);
+                return 'Transcription failed.';
+            }
+        }
+
+        async function identifySpeakers(transcription) {
+            const prompt = `Identify speakers in the following text and assign a speaker number. Do not use real names, instead use "Speaker 1", "Speaker 2", etc. Return the transcribed text with speaker tags. ${transcription}`;
+
+            try {
+                const response = await fetch('https://api.openai.com/v1/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Bearer YOUR_OPENAI_API_KEY', // Replace with your OpenAI API key
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        model: "text-davinci-003",
+                        prompt: prompt,
+                        max_tokens: 1000
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                let textWithSpeakers = data.choices[0].text.trim();
+                let speakerRegex = /Speaker (\d+):/g;
+                let match;
+
+                while ((match = speakerRegex.exec(textWithSpeakers)) !== null) {
+                    let speakerNumber = parseInt(match[1]);
+                    if (!speakers[speakerNumber]) {
+                        speakers[speakerNumber] = `Speaker ${speakerNumber}`;
+                    }
+                }
+
+                return textWithSpeakers;
+
+            } catch (error) {
+                console.error('Speaker identification error:', error);
+                return `Speaker identification failed. ${transcription}`;
+            }
+        }
+
+        function saveRecording(recordingData) {
+            const jsonData = JSON.stringify(recordingData);
+            const blob = new Blob([jsonData], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'meeting.meeting';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        fileInput.onchange = (event) => {
+            const file = event.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const jsonData = JSON.parse(e.target.result);
+                    displayRecording(jsonData);
+                };
+                reader.readAsText(file);
+            }
+        };
+
+        function displayRecording(recordingData) {
+            let detailsHtml = `<audio src="${recordingData.audioUrl}" controls></audio><br><br>`;
+            let transcription = recordingData.transcription;
+
+            for (const speakerNumber in recordingData.speakers) {
+                const speakerName = recordingData.speakers[speakerNumber];
+                const renameInput = `<input type="text" value="${speakerName}" id="speaker-${speakerNumber}">`;
+                detailsHtml += `Speaker ${speakerNumber}: ${renameInput}<br>`;
+            }
+
+            detailsHtml += `<br><textarea id="transcription">${transcription}</textarea><br>`;
+            detailsHtml += `<button id="saveSpeakerChanges">Save Speaker Changes</button>`;
+
+            meetingDetailsDiv.innerHTML = detailsHtml;
+
+            document.getElementById('saveSpeakerChanges').onclick = () => {
+                for(const speakerNumber in recordingData.speakers){
+                    recordingData.speakers[speakerNumber] = document.getElementById(`speaker-${speakerNumber}`).value;
+                }
+                recordingData.transcription = document.getElementById("transcription").value;
+                saveRecording(recordingData);
+            }
+
+            recordingsDiv.style.display = 'none';
+            recordingViewDiv.style.display = 'block';
+        }
+
+        viewSavedButton.onclick = () => {
+            recordingsDiv.style.display = 'block';
+            recordingViewDiv.style.display = 'none';
+        };
+
+        backToSavedButton.onclick = () => {
+            recordingsDiv.style.display = 'block';
+            recordingViewDiv.style.display = 'none';
+        };
+    </script>
 </body>
 </html>
