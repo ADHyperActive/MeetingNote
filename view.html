@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Otter Clone - View Meetings</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <h1>View Meetings</h1>
+    <div id="meetings"></div>
+    <script>
+        const meetingsDiv = document.getElementById('meetings');
+        const meetingData = JSON.parse(localStorage.getItem('meetings') || '[]');
+
+        meetingData.forEach((meeting, index) => {
+            const meetingDiv = document.createElement('div');
+            meetingDiv.innerHTML = `
+                <h2>Meeting ${index + 1}</h2>
+                <p>Date: ${meeting.date}</p>
+                <p>Speakers: ${Object.keys(meeting.speakers).join(', ')}</p>
+                <div class="transcription">${meeting.transcription}</div>
+            `;
+            meetingsDiv.appendChild(meetingDiv);
+        });
+    </script>
+</body>
+</html>
